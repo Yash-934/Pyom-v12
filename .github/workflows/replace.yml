@@ -1,4 +1,4 @@
-name: Replace Project From Root ZIP
+name: Replace Project From Root ZIP (Auto Flatten)
 
 on:
   workflow_dispatch:
@@ -22,18 +22,39 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found!"
+            echo "❌ No ZIP file found in root!"
             exit 1
           fi
 
           echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+          echo "Found ZIP: $ZIP_FILE"
 
-      # 📦 Extract
+      # 📦 Extract ZIP
       - name: Extract ZIP
         run: unzip -o "$ZIP_FILE" -d extracted
 
-      # 🔥 Clean root
-      - name: Clean old files
+      # 🔎 Auto detect deepest folder (flatten fully)
+      - name: Detect deepest project folder
+        run: |
+          TARGET="extracted"
+
+          # Loop until no single inner folder exists
+          while true; do
+            COUNT=$(find "$TARGET" -mindepth 1 -maxdepth 1 -type d | wc -l)
+            FILES=$(find "$TARGET" -mindepth 1 -maxdepth 1 -type f | wc -l)
+
+            if [ "$COUNT" -eq 1 ] && [ "$FILES" -eq 0 ]; then
+              TARGET=$(find "$TARGET" -mindepth 1 -maxdepth 1 -type d)
+            else
+              break
+            fi
+          done
+
+          echo "FINAL_DIR=$TARGET" >> $GITHUB_ENV
+          echo "Final project folder: $TARGET"
+
+      # 🔥 Clean root except .git .github
+      - name: Clean old project
         run: |
           find . -mindepth 1 -maxdepth 1 \
           ! -name ".git" \
@@ -41,31 +62,20 @@ jobs:
           ! -name "extracted" \
           -exec rm -rf {} +
 
-      # 🚀 Move extracted content
+      # 🚀 Replace root with project files
       - name: Move files to root
         run: |
-          INNER_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
-
-          if [ -n "$INNER_DIR" ]; then
-            rsync -a "$INNER_DIR"/ ./
-          else
-            rsync -a extracted/ ./
-          fi
-
+          rsync -a "$FINAL_DIR"/ ./
           rm -rf extracted
           rm -f *.zip
 
-      # 💾 Commit & FORCE Sync
-      - name: Commit and Push
+      # 💾 Commit & Force Push (no conflict ever)
+      - name: Commit & Push
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           git add -A
-          git commit -m "Project replaced from root ZIP" || echo "Nothing to commit"
+          git commit -m "Project replaced from ZIP (auto-flattened)" || echo "Nothing to commit"
 
-          # Pull latest remote changes safely
-          git pull origin main --rebase
-
-          # Push updated branch
-          git push origin main
+          git push origin main --force
